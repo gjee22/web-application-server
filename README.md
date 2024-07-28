@@ -31,7 +31,7 @@
 * 
 
 ### 요구사항 4 - redirect 방식으로 이동
-* 
+HTTP Response 헤더의 Location 필드를 이용하면 이동하는 페이지를 지정할 수 있다.
 
 ### 요구사항 5 - cookie
 * 
