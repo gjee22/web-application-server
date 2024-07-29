@@ -10,7 +10,11 @@ import java.io.OutputStream;
 import java.net.Socket;
 import java.nio.file.Files;
 import java.nio.file.Paths;
+import java.nio.file.attribute.DosFileAttributes;
+import java.text.FieldPosition;
 import java.util.Map;
+
+import org.hamcrest.core.AllOf;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -28,7 +32,6 @@ public class RequestHandler extends Thread {
     private static final Logger log = LoggerFactory.getLogger(RequestHandler.class);
 
     private Socket connection;
-    private boolean login = false;
     public RequestHandler(Socket connectionSocket) {
         this.connection = connectionSocket;
     }
@@ -43,17 +46,15 @@ public class RequestHandler extends Thread {
         	String[] req = br.readLine().split(" ");
         	String reqType = req[0];
         	String reqPath = req[1];
-        	System.out.println(login);
-        	
+        	DataOutputStream dos = new DataOutputStream(out);
         	switch (reqPath) {
-        		case "/index.html" -> getIndex(new DataOutputStream(out));
-        		case "/user/form.html" -> getRegister(new DataOutputStream(out));
-        		case "/login_failed.html" -> getLoginFailurePage(new DataOutputStream(out));
-        		case "/user/login.html" -> getLoginPage(new DataOutputStream(out));
+        		case "/index.html", "/user/form.html", "/user/login_failed.html", "/user/login.html" 
+        				-> handleGetRequest(dos, reqPath);
         		case "/user/list" -> handleUserListRequest(new DataOutputStream(out), br);
         		default -> {
-        			if (reqPath.startsWith("/user/create")) handleRegister(new DataOutputStream(out), br);
-        			if (reqPath.startsWith("/user/login")) handleLogin(new DataOutputStream(out), br, reqType);
+        			if (reqPath.startsWith("/user/create")) handleRegister(dos, br);
+        			if (reqPath.startsWith("/user/login")) handleLogin(dos, br, reqType);
+        			if (reqPath.endsWith(".css")) applyCSS(dos, reqPath);
         		}
         	}
             log.info("Request type: {}, Request path: {}", req[0], req[1]);
@@ -62,46 +63,41 @@ public class RequestHandler extends Thread {
         }
     }
     
-    
-    private void getIndex(DataOutputStream dos) throws IOException {
-    	byte[] body = Files.readAllBytes(Paths.get(new File("./webapp/index.html").toURI()));
-    	response200Header(dos, body.length);
+    private void handleGetRequest(DataOutputStream dos, String file) throws IOException {
+    	byte[] body = Files.readAllBytes(Paths.get(new File("./webapp" + file).toURI()));
+    	responseHttpHeader(dos, "200", body.length, null);
     	responseBody(dos, body);
     }
     
-    private void getRegister(DataOutputStream dos) throws IOException {
-    	handleGetRequest(dos, "./webapp/user/form.html");
-    }
-    
-    private void getLoginPage(DataOutputStream dos) throws IOException {
-    	handleGetRequest(dos, "./webapp/user/login.html");
+    private void applyCSS(DataOutputStream dos, String reqPath) throws IOException {
+    	byte[] body = Files.readAllBytes(Paths.get(new File("./webapp/" + reqPath).toURI()));
+    	responseCSSHeader(dos, body.length);
+    	responseBody(dos, body);
     }
     
     private void handleUserListRequest(DataOutputStream dos, BufferedReader br) throws IOException {
-    	// 쿠키가 false를 리턴해야 할 때 안됨
     	if (checkLoginCookie(br)) {
-        	byte[] body = Files.readAllBytes(Paths.get(new File("./webapp/user/list.html").toURI()));
-    		response200Header(dos, body.length);
-    		responseBody(dos, body);
+    		// Get all users and append it with html
+        	handleGetRequest(dos, "/user/list.html");
     	} else {
-    		response302Header(dos, 0, "http://localhost:8080/user/login.html");
+    		responseHttpHeader(dos, "302", 0, "/user/login.html");
     		responseBody(dos, new byte[0]);
     	}
     }
     
     private boolean checkLoginCookie(BufferedReader br) throws IOException {
     	String cur = "";
-    	while (!(cur = br.readLine()).startsWith("Cookie"));
-    	Pair headerPair = HttpRequestUtils.parseHeader(cur);
-		String StringBool = headerPair.getValue().split("[=; ]")[1];
-		boolean logined = Boolean.parseBoolean(StringBool);
-    	return logined;
+    	while (!(cur = br.readLine()).isEmpty() && !cur.startsWith("Cookie")); 
+    	if (cur.isEmpty() || cur == null) return false;
+    	Map<String, String> cookies = HttpRequestUtils.parseCookies(cur.split(":")[1].trim());
+    	boolean loggedIn = Boolean.parseBoolean(cookies.get("logined"));
+    	return loggedIn;
     }
     
     private void handleRegister(DataOutputStream dos, BufferedReader br) throws IOException {
     	String dataString = getUserInfo(br);
     	register(dataString);
-    	response302Header(dos, 0, "http://localhost:8080/index.html");
+    	responseHttpHeader(dos, "302", 0, "/index.html");
     }
     
     private void handleLogin(DataOutputStream dos, BufferedReader br, String reqType) throws IOException {
@@ -119,12 +115,6 @@ public class RequestHandler extends Thread {
     	}
     }
     
-    private void getLoginFailurePage(DataOutputStream dos) throws IOException {
-    	byte[] body = Files.readAllBytes(Paths.get(new File("./webapp/user/login_failed.html").toURI()));
-    	response200Header(dos, body.length);
-    	responseBody(dos, body);
-    }
-    
     private String getUserInfo(BufferedReader br) throws IOException {
 		String cur = "";
 		int contentLen = 0;
@@ -138,20 +128,13 @@ public class RequestHandler extends Thread {
 	}
     
     private void handleLoginSuccess(DataOutputStream dos) throws IOException {
-    	login = true;
-    	response302Header(dos, 0, "http://localhost:8080/index.html");
+    	responseLoginSuccessHeader(dos, 0);
     	responseBody(dos, new byte[0]);
     }
     
     private void handleLoginFailure(DataOutputStream dos) throws IOException {
-    	response302Header(dos, 0, "http://localhost:8080/login_failed.html");
+    	responseHttpHeader(dos, "302", 0, "/user/login_failed.html");
     	responseBody(dos, new byte[0]);
-    }
-    
-    private void handleGetRequest(DataOutputStream dos, String file) throws IOException {
-    	byte[] body = Files.readAllBytes(Paths.get(new File(file).toURI()));
-    	response200Header(dos, body.length);
-    	responseBody(dos, body);
     }
     
     private boolean checkLogin(String dataString) {
@@ -169,25 +152,43 @@ public class RequestHandler extends Thread {
     	}
     }
 
-    private void response200Header(DataOutputStream dos, int lengthOfBodyContent) {
+    private void responseHttpHeader(DataOutputStream dos, String resType, int lengthOfBodyContent, String loc) {
         try {
-            dos.writeBytes("HTTP/1.1 200 OK \r\n");
+        	if (resType.equals("302")) {
+                dos.writeBytes("HTTP/1.1 302 OK \r\n");
+                dos.writeBytes("Location: " + loc + "\r\n");
+                
+        	} else {
+                dos.writeBytes("HTTP/1.1 200 OK \r\n");
+        	}
             dos.writeBytes("Content-Type: text/html;charset=utf-8\r\n");
             dos.writeBytes("Content-Length: " + lengthOfBodyContent + "\r\n");
-            dos.writeBytes("Set-Cookie: logined=" + login + "\r\n");
             dos.writeBytes("\r\n");
         } catch (IOException e) {
             log.error(e.getMessage());
         }
     }
     
-    private void response302Header(DataOutputStream dos, int lengthOfBodyContent, String loc) {
-        try {
-            dos.writeBytes("HTTP/1.1 302 OK \r\n");
-            dos.writeBytes("Content-Type: text/html;charset=utf-8\r\n");
-            dos.writeBytes("Location: " + loc + "\r\n");
+    private void responseLoginSuccessHeader(DataOutputStream dos, int lengthOfBodyContent) {
+    	try {
+    		dos.writeBytes("HTTP/1.1 302 OK \r\n");
+    	    dos.writeBytes("Content-Type: text/html;charset=utf-8\r\n");
+    	    dos.writeBytes("Content-Length: " + lengthOfBodyContent + "\r\n");
+    	    dos.writeBytes("Set-Cookie: logined=true\r\n");
+    	    dos.writeBytes("Location: /index.html\r\n");
+    	    dos.writeBytes("\r\n");
+    	    log.debug("Entered login success header");
+		} catch (IOException e) {
+            log.error(e.getMessage());
+        }
+    }
+    
+    private void responseCSSHeader(DataOutputStream dos, int lengthOfBodyContent) {
+    	try {
+    		log.debug("CSS is applied");
+            dos.writeBytes("HTTP/1.1 200 OK \r\n");
+            dos.writeBytes("Content-Type: text/css;charset=utf-8\r\n");
             dos.writeBytes("Content-Length: " + lengthOfBodyContent + "\r\n");
-            dos.writeBytes("Set-Cookie: logined=" + login + "\r\n");
             dos.writeBytes("\r\n");
         } catch (IOException e) {
             log.error(e.getMessage());
