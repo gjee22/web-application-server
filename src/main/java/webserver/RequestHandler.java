@@ -1,6 +1,5 @@
 package webserver;
 
-import java.awt.desktop.UserSessionEvent;
 import java.io.BufferedReader;
 import java.io.DataOutputStream;
 import java.io.File;
@@ -9,16 +8,9 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.Socket;
+import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.Map;
-import java.util.logging.Handler;
-
-import javax.sound.sampled.Line;
-import javax.tools.DocumentationTool.Location;
-
-import java.nio.file.Files;
-import java.nio.file.Path;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -27,6 +19,7 @@ import com.google.common.base.CaseFormat;
 import db.DataBase;
 import model.User;
 import util.HttpRequestUtils;
+import util.HttpRequestUtils.Pair;
 import util.IOUtils;
 
 
@@ -36,7 +29,6 @@ public class RequestHandler extends Thread {
 
     private Socket connection;
     private boolean login = false;
-    private boolean setCookie = false;
     public RequestHandler(Socket connectionSocket) {
         this.connection = connectionSocket;
     }
@@ -51,11 +43,14 @@ public class RequestHandler extends Thread {
         	String[] req = br.readLine().split(" ");
         	String reqType = req[0];
         	String reqPath = req[1];
+        	System.out.println(login);
         	
         	switch (reqPath) {
         		case "/index.html" -> getIndex(new DataOutputStream(out));
         		case "/user/form.html" -> getRegister(new DataOutputStream(out));
         		case "/login_failed.html" -> getLoginFailurePage(new DataOutputStream(out));
+        		case "/user/login.html" -> getLoginPage(new DataOutputStream(out));
+        		case "/user/list" -> handleUserListRequest(new DataOutputStream(out), br);
         		default -> {
         			if (reqPath.startsWith("/user/create")) handleRegister(new DataOutputStream(out), br);
         			if (reqPath.startsWith("/user/login")) handleLogin(new DataOutputStream(out), br, reqType);
@@ -67,6 +62,7 @@ public class RequestHandler extends Thread {
         }
     }
     
+    
     private void getIndex(DataOutputStream dos) throws IOException {
     	byte[] body = Files.readAllBytes(Paths.get(new File("./webapp/index.html").toURI()));
     	response200Header(dos, body.length);
@@ -75,6 +71,31 @@ public class RequestHandler extends Thread {
     
     private void getRegister(DataOutputStream dos) throws IOException {
     	handleGetRequest(dos, "./webapp/user/form.html");
+    }
+    
+    private void getLoginPage(DataOutputStream dos) throws IOException {
+    	handleGetRequest(dos, "./webapp/user/login.html");
+    }
+    
+    private void handleUserListRequest(DataOutputStream dos, BufferedReader br) throws IOException {
+    	// 쿠키가 false를 리턴해야 할 때 안됨
+    	if (checkLoginCookie(br)) {
+        	byte[] body = Files.readAllBytes(Paths.get(new File("./webapp/user/list.html").toURI()));
+    		response200Header(dos, body.length);
+    		responseBody(dos, body);
+    	} else {
+    		response302Header(dos, 0, "http://localhost:8080/user/login.html");
+    		responseBody(dos, new byte[0]);
+    	}
+    }
+    
+    private boolean checkLoginCookie(BufferedReader br) throws IOException {
+    	String cur = "";
+    	while (!(cur = br.readLine()).startsWith("Cookie"));
+    	Pair headerPair = HttpRequestUtils.parseHeader(cur);
+		String StringBool = headerPair.getValue().split("[=; ]")[1];
+		boolean logined = Boolean.parseBoolean(StringBool);
+    	return logined;
     }
     
     private void handleRegister(DataOutputStream dos, BufferedReader br) throws IOException {
@@ -136,7 +157,7 @@ public class RequestHandler extends Thread {
     private boolean checkLogin(String dataString) {
     	Map<String, String> map = HttpRequestUtils.parseQueryString(dataString);
     	User user = DataBase.findUserById(map.get("userId"));
-    	return user == null ? false : true;
+    	return (user == null || !user.getPassword().equals(map.get("password"))) ? false : true;
     }
     
     private void register(String dataString) throws IOException {
@@ -167,7 +188,6 @@ public class RequestHandler extends Thread {
             dos.writeBytes("Location: " + loc + "\r\n");
             dos.writeBytes("Content-Length: " + lengthOfBodyContent + "\r\n");
             dos.writeBytes("Set-Cookie: logined=" + login + "\r\n");
-//            if (!setCookie && login) dos.writeBytes("Set-Cookie: logined=" + login + "\r\n");
             dos.writeBytes("\r\n");
         } catch (IOException e) {
             log.error(e.getMessage());
