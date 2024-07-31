@@ -3,18 +3,26 @@ package webserver;
 import java.io.BufferedReader;
 import java.io.DataOutputStream;
 import java.io.File;
+import java.io.FileReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.Socket;
+import java.net.URLDecoder;
+import java.nio.charset.Charset;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.nio.file.attribute.DosFileAttributes;
 import java.text.FieldPosition;
+import java.util.Collection;
+import java.util.List;
 import java.util.Map;
 
+import javax.swing.text.html.HTMLDocument;
+
 import org.hamcrest.core.AllOf;
+import org.junit.internal.matchers.StacktracePrintingMatcher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -41,7 +49,6 @@ public class RequestHandler extends Thread {
                 connection.getPort());
 
         try (InputStream in = connection.getInputStream(); OutputStream out = connection.getOutputStream()) {
-            // TODO 사용자 요청에 대한 처리는 이 곳에 구현하면 된다        	
         	BufferedReader br = new BufferedReader(new InputStreamReader(in));
         	String[] req = br.readLine().split(" ");
         	String reqType = req[0];
@@ -77,13 +84,41 @@ public class RequestHandler extends Thread {
     
     private void handleUserListRequest(DataOutputStream dos, BufferedReader br) throws IOException {
     	if (checkLoginCookie(br)) {
-    		// Get all users and append it with html
-        	handleGetRequest(dos, "/user/list.html");
+    		try (
+			BufferedReader fileReader = new BufferedReader(new FileReader("./webapp/user/list.html"))) {
+				StringBuilder fileContent = new StringBuilder();
+				String cur;
+				String checkLocString = "<th scope=\"row\">2</th> <td>slipp</td> <td>슬립</td> "
+						+ "<td>slipp@sample.net</td><td><a href=\"#\" class=\"btn btn-success\" "
+						+ "role=\"button\">수정</a></td>";
+				while ((cur = fileReader.readLine()) != null) {
+					fileContent.append(cur);
+					log.debug(cur);
+					if (cur.contains(checkLocString)) {
+						fileReader.readLine();
+						Object[] users = DataBase.findAll().toArray();
+						for (int i = 3; i < users.length + 3; i++) {
+							User user = (User) users[i - 3];
+							log.debug("User {} in the list", user.getUserId());
+							fileContent.append("<tr>\r\n");
+							fileContent.append("                    <th scope=\"row\">" + i + "</th> ");
+							fileContent.append("<td>" + URLDecoder.decode(user.getUserId(), "UTF-8") + "</td> ");
+							fileContent.append("<td>" + URLDecoder.decode(user.getName(), "UTF-8") + "</td> ");
+							fileContent.append("<td>" + URLDecoder.decode(user.getEmail(), "UTF-8") + "</td> ");
+							fileContent.append("<td><a href=\"#\" class=\"btn btn-success\" role=\"button\">수정</a></td>");
+						}
+					}
+				}
+				byte[] body = fileContent.toString().getBytes(Charset.forName("UTF-8"));
+				responseHttpHeader(dos, "200", body.length, null);
+				responseBody(dos, body);
+			}
     	} else {
     		responseHttpHeader(dos, "302", 0, "/user/login.html");
     		responseBody(dos, new byte[0]);
     	}
     }
+    
     
     private boolean checkLoginCookie(BufferedReader br) throws IOException {
     	String cur = "";
@@ -147,9 +182,7 @@ public class RequestHandler extends Thread {
     	Map<String, String> userInfo = HttpRequestUtils.parseQueryString(dataString);
     	User user = new User(userInfo.get("userId"), userInfo.get("password"), userInfo.get("name"), userInfo.get("email"));
     	DataBase.addUser(user);
-    	for (User u : DataBase.findAll()) {
-    		System.out.println(u);
-    	}
+    	log.debug("Added user: {}", user.getUserId());
     }
 
     private void responseHttpHeader(DataOutputStream dos, String resType, int lengthOfBodyContent, String loc) {
@@ -185,7 +218,6 @@ public class RequestHandler extends Thread {
     
     private void responseCSSHeader(DataOutputStream dos, int lengthOfBodyContent) {
     	try {
-    		log.debug("CSS is applied");
             dos.writeBytes("HTTP/1.1 200 OK \r\n");
             dos.writeBytes("Content-Type: text/css;charset=utf-8\r\n");
             dos.writeBytes("Content-Length: " + lengthOfBodyContent + "\r\n");
